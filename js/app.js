@@ -14,12 +14,14 @@ import {
 } from './elements.js';
 import { DEFAULT_PROVIDER, MAX_OUTPUT_TOKENS, PROVIDERS, TEST_PROMPT } from './constants.js';
 import { diffWords, textStats } from './diff.js';
+import { KEY_STEP, createGuide } from './guide.js';
 import { ProviderError, runPrompt } from './provider.js';
 
 const STORAGE = {
   editor: 'pp.editor.v1',
   settings: 'pp.settings.v1',
   keys: 'pp.keys.v1', // API keys: sessionStorage only, so they go when the tab closes
+  guideSeen: 'pp.guide-seen.v1',
 };
 const FEEDBACK_MS = 1600;
 const PROVIDER_IDS = Object.keys(PROVIDERS);
@@ -133,6 +135,8 @@ const ui = {
   diffIdentical: $('diff-identical'),
   wordDiff: $('word-diff'),
   scrim: $('scrim'),
+  openGuide: $('open-guide'),
+  guide: $('guide'),
   openSettings: $('open-settings'),
   settings: $('settings'),
   settingsClose: $('settings-close'),
@@ -234,6 +238,7 @@ function formatDuration(ms) {
 }
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform ?? navigator.platform ?? '');
+const shortcutLabel = isMac ? '⌘ Enter' : 'Ctrl Enter';
 
 // ---------------------------------------------------------------------------
 // Editor
@@ -452,9 +457,9 @@ function syncSettingsForm() {
   ui.maxTokens.value = String(maxTokens);
 }
 
-function showTestResult(kind, message) {
+function showTestResult(kind, message, extra = null) {
   ui.testResult.className = kind ? `test-result is-${kind}` : 'test-result';
-  ui.testResult.textContent = message;
+  ui.testResult.replaceChildren(message, ...(extra ? [' ', extra] : []));
 }
 
 function stopTest() {
@@ -533,7 +538,7 @@ async function testConnection() {
   const setup = currentSetup();
   const { label } = PROVIDERS[setup.provider];
   if (!state.keys[setup.provider].trim()) {
-    showTestResult('error', `Paste your ${label} API key into the field above first.`);
+    showTestResult('error', `Paste your ${label} API key into the field above first.`, guideLink('How to get a key'));
     return;
   }
   state.test?.abort();
@@ -600,11 +605,12 @@ function renderRunControls() {
   ui.runSetup.setAttribute('aria-label', `${setup}: open Settings`);
 }
 
-function setStatus(kind, message, action = '') {
+function setStatus(kind, message, action = '', extra = null) {
   ui.runStatus.className = kind ? `run-status is-${kind}` : 'run-status';
   const parts = [h('span', {}, message)];
   if (kind === 'running') parts.unshift(h('span', { class: 'spinner', 'aria-hidden': 'true' }));
   if (action) parts.push(h('span', { class: 'status-action' }, action));
+  if (extra) parts.push(extra);
   ui.runStatus.replaceChildren(...parts);
 }
 
@@ -685,7 +691,8 @@ async function startRun() {
       announce('Cancelled.');
     } else {
       const problem = error instanceof ProviderError ? error : unexpected(error);
-      setStatus('error', problem.summary, problem.action);
+      const help = problem.kind === 'missing-key' ? guideLink('How to add a key') : null;
+      setStatus('error', problem.summary, problem.action, help);
       alertNow(problem.message);
     }
   } finally {
@@ -1003,6 +1010,32 @@ function diffNodes(segments) {
 }
 
 // ---------------------------------------------------------------------------
+// How-to guide
+
+const guide = createGuide(ui.guide, {
+  shortcut: shortcutLabel,
+  // Once closed, the guide doesn't open by itself again in this tab.
+  onClose: () => session.write(STORAGE.guideSeen, true),
+  // The last step's Start button goes straight to the Task field.
+  onStart: () => {
+    if (ui.settings.open) closeSettings();
+    fieldFor('task', 'text').focus();
+  },
+});
+
+ui.openGuide.addEventListener('click', () => guide.open(1));
+
+// "How to add a key" and similar links open the guide at the API key step.
+function guideLink(label) {
+  return h('button', { type: 'button', class: 'link-button', 'data-guide-step': KEY_STEP }, label);
+}
+
+document.addEventListener('click', (event) => {
+  const link = event.target.closest('[data-guide-step]');
+  if (link) guide.open(Number(link.dataset.guideStep));
+});
+
+// ---------------------------------------------------------------------------
 // Start
 
 buildEditor();
@@ -1013,8 +1046,10 @@ renderAssembled();
 renderRuns();
 renderOutput();
 renderRunControls();
-ui.runShortcut.textContent = isMac ? '⌘ Enter' : 'Ctrl Enter';
+ui.runShortcut.textContent = shortcutLabel;
 ui.bootNote.remove();
+// First visit in this tab: open the guide.
+if (!session.read(STORAGE.guideSeen)) guide.open(1);
 
 let resizeTimer;
 window.addEventListener('resize', () => {

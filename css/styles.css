@@ -329,6 +329,22 @@ code {
   font-size: 13px;
 }
 
+/* An in-page action worded as a link, such as "How to add a key". */
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 550;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--accent-hover);
+}
+
 .btn-danger {
   border-color: var(--danger);
   background: var(--danger);
@@ -1138,6 +1154,268 @@ legend.setting-label {
 @media (max-width: 760px) {
   .compare-columns {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- How-to guide ---------- */
+
+.guide {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.guide::backdrop {
+  background: var(--bg);
+}
+
+.guide-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: var(--topbar-height);
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.guide-head h2 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.guide-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  align-items: start;
+  gap: 40px;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 36px 24px 56px;
+}
+
+.guide-steps {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guide-step-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.guide-step-link:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.guide-step-link[aria-current="step"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.guide-num {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.guide-step-link[aria-current="step"] .guide-num {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.guide-step {
+  display: grid;
+  gap: 16px;
+  max-width: 640px;
+}
+
+.guide-progress {
+  color: var(--text-faint);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.guide-title {
+  margin-top: -8px;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.guide-title:focus {
+  outline: none;
+}
+
+.guide-body {
+  display: grid;
+  gap: 12px;
+  font-size: 15.5px;
+  line-height: 1.6;
+}
+
+.guide-body ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.guide-body a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
+.guide-body a:hover {
+  color: var(--accent-hover);
+}
+
+.guide-figure {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  cursor: default;
+}
+
+.guide-figure * {
+  cursor: inherit;
+}
+
+.guide-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* Illustrations reuse the real controls' classes; these rules only lay them out. */
+.illo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.illo-flow {
+  align-items: flex-start;
+  justify-content: center;
+}
+
+/* Controls share one 36px row so the captions under them line up. */
+.illo-stage {
+  display: grid;
+  grid-template-rows: 36px auto;
+  align-items: center;
+  justify-items: center;
+  gap: 8px;
+}
+
+.illo-caption {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.illo-arrow {
+  color: var(--text-faint);
+  font-size: 20px;
+  line-height: 36px;
+}
+
+.illo-panel {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  max-width: 380px;
+}
+
+.illo-panel > .btn {
+  align-self: flex-start;
+}
+
+.illo-key {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  letter-spacing: 2px;
+}
+
+.illo-split {
+  align-items: flex-start;
+}
+
+.illo-split > * {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.illo-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.illo-field {
+  min-height: 0;
+}
+
+.illo-bar {
+  position: static;
+  box-shadow: none;
+}
+
+.illo .mono-block {
+  max-height: none;
+}
+
+@media (max-width: 760px) {
+  .guide-head {
+    padding: 0 16px;
+  }
+
+  .guide-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+    padding: 20px 16px 40px;
+  }
+
+  .guide-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
