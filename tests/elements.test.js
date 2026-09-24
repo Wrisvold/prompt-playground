@@ -7,6 +7,7 @@ import {
   cloneElements,
   createEmptyElements,
   estimateTokens,
+  hasContent,
   normalizeElements,
   tidy,
 } from '../js/elements.js';
@@ -175,6 +176,15 @@ test('tidy trims single lines but keeps the indentation of multi-line text', () 
   assert.equal(tidy('\n\n  a\n    b\n'), '  a\n    b');
   assert.equal(tidy('  \n\t\n'), '');
   assert.equal(tidy(undefined), '');
+});
+
+test('hasContent looks at the text, or at any Rules sub-field', () => {
+  const rules = ELEMENTS.find((def) => def.id === 'rules');
+  const task = ELEMENTS.find((def) => def.id === 'task');
+  assert.equal(hasContent(task, { plugged: true, text: '  \n ' }), false);
+  assert.equal(hasContent(task, { plugged: false, text: 'x' }), true);
+  assert.equal(hasContent(rules, { plugged: true, do: '', dont: '', fallback: '' }), false);
+  assert.equal(hasContent(rules, { plugged: true, do: '', dont: 'No jargon', fallback: '' }), true);
 });
 
 test('estimateTokens is characters divided by four, rounded up', () => {

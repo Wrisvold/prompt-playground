@@ -74,6 +74,11 @@ export function tidy(text) {
   return tidied.includes('\n') ? tidied : tidied.trimStart();
 }
 
+// True when a field (or, for Rules, any of its sub-fields) has text in it.
+export function hasContent(def, element) {
+  return textKeys(def).some((key) => tidy(element?.[key]) !== '');
+}
+
 // The prompt that gets sent: each plugged, non-empty element under a "## Label" heading,
 // in the fixed order, separated by a blank line. Rules becomes "Do: …", "Don't: …" and
 // "Fallback: …" lines, leaving out empty ones; a multi-line rule starts on the line after

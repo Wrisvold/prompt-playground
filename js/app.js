@@ -1,21 +1,30 @@
-// State and wiring: builds the editor from the element definitions, keeps the assembled
-// prompt live, and autosaves the editor. The logic lives in the pure modules; this is the
+// State and wiring. The logic lives in the pure modules (elements.js, provider.js); this is the
 // only file that touches the DOM or sessionStorage.
 
 import {
   ELEMENTS,
   assemble,
+  cloneElements,
   createEmptyElements,
   estimateTokens,
+  hasContent,
   normalizeElements,
   textKeys,
 } from './elements.js';
+import { DEFAULT_PROVIDER, MAX_OUTPUT_TOKENS, PROVIDERS, TEST_PROMPT } from './constants.js';
+import { ProviderError, runPrompt } from './provider.js';
 
-const EDITOR_KEY = 'pp.editor.v1';
+const STORAGE = {
+  editor: 'pp.editor.v1',
+  settings: 'pp.settings.v1',
+  keys: 'pp.keys.v1', // API keys: sessionStorage only, so they go when the tab closes
+};
 const FEEDBACK_MS = 1600;
+const PROVIDER_IDS = Object.keys(PROVIDERS);
+// Test connection errors that still prove the key and model work: the model did answer.
+const ANSWERED = new Set(['empty', 'blocked', 'out-of-tokens']);
 
-// sessionStorage throws when storage is disabled or full. The app keeps working without
-// autosave rather than failing.
+// sessionStorage throws when storage is disabled or full. The app keeps working without it.
 const session = {
   read(key) {
     try {
@@ -29,32 +38,106 @@ const session = {
     try {
       sessionStorage.setItem(key, JSON.stringify(value));
     } catch {
-      // Autosave is a convenience; carry on without it.
+      // Saving is a convenience; carry on without it.
     }
   },
 };
 
+function clampTokens(value, fallback) {
+  const number = Number(value);
+  if (value === '' || value == null || !Number.isFinite(number)) return fallback;
+  return Math.min(MAX_OUTPUT_TOKENS.max, Math.max(MAX_OUTPUT_TOKENS.min, Math.round(number)));
+}
+
+function normalizeSettings(raw) {
+  const settings = {
+    provider: DEFAULT_PROVIDER,
+    models: Object.fromEntries(PROVIDER_IDS.map((id) => [id, PROVIDERS[id].defaultModel])),
+    maxTokens: MAX_OUTPUT_TOKENS.default,
+  };
+  if (!raw || typeof raw !== 'object') return settings;
+  if (PROVIDER_IDS.includes(raw.provider)) settings.provider = raw.provider;
+  for (const id of PROVIDER_IDS) {
+    const model = raw.models?.[id];
+    if (typeof model === 'string' && model.trim()) settings.models[id] = model.trim();
+  }
+  settings.maxTokens = clampTokens(raw.maxTokens, settings.maxTokens);
+  return settings;
+}
+
+function normalizeKeys(raw) {
+  return Object.fromEntries(PROVIDER_IDS.map((id) => [id, typeof raw?.[id] === 'string' ? raw[id] : '']));
+}
+
 const state = {
-  elements: normalizeElements(session.read(EDITOR_KEY)?.elements),
+  elements: normalizeElements(session.read(STORAGE.editor)?.elements),
+  settings: normalizeSettings(session.read(STORAGE.settings)),
+  keys: normalizeKeys(session.read(STORAGE.keys)),
+  runs: [], // newest first; kept in memory only, so a reload clears them
+  runCount: 0,
+  viewedRunId: null,
+  active: null, // the run in progress: { controller, startedAt, timer, retrying, edited }
+  test: null, // AbortController for a Test connection in progress
 };
 
+const $ = (id) => document.getElementById(id);
 const ui = {
-  bootNote: document.getElementById('boot-note'),
-  elementList: document.getElementById('element-list'),
-  clearAll: document.getElementById('clear-all'),
-  confirmClear: document.getElementById('confirm-clear'),
-  assembled: document.getElementById('assembled'),
-  assembledEmpty: document.getElementById('assembled-empty'),
-  promptStats: document.getElementById('prompt-stats'),
-  copyPrompt: document.getElementById('copy-prompt'),
-  announcer: document.getElementById('announcer'),
+  topbar: $('topbar'),
+  main: $('main'),
+  bootNote: $('boot-note'),
+  elementList: $('element-list'),
+  clearAll: $('clear-all'),
+  confirmClear: $('confirm-clear'),
+  assembled: $('assembled'),
+  assembledEmpty: $('assembled-empty'),
+  promptStats: $('prompt-stats'),
+  copyPrompt: $('copy-prompt'),
+  run: $('run'),
+  runShortcut: $('run-shortcut'),
+  cancel: $('cancel'),
+  editedBadge: $('edited-badge'),
+  runStatus: $('run-status'),
+  runSetup: $('run-setup'),
+  outputSection: $('output-section'),
+  outputMeta: $('output-meta'),
+  outputActions: $('output-actions'),
+  output: $('output'),
+  outputNote: $('output-note'),
+  outputEmpty: $('output-empty'),
+  sentPrompt: $('sent-prompt'),
+  sentPromptSummary: $('sent-prompt-summary'),
+  sentPromptText: $('sent-prompt-text'),
+  copyOutput: $('copy-output'),
+  loadRun: $('load-run'),
+  runs: $('runs'),
+  runsTitle: $('runs-title'),
+  runsToggle: $('runs-toggle'),
+  runsCount: $('runs-count'),
+  runsClose: $('runs-close'),
+  runList: $('run-list'),
+  runsEmpty: $('runs-empty'),
+  scrim: $('scrim'),
+  openSettings: $('open-settings'),
+  settings: $('settings'),
+  settingsClose: $('settings-close'),
+  providerOptions: $('provider-options'),
+  apiKey: $('api-key'),
+  apiKeyLabel: $('api-key-label'),
+  apiKeyNote: $('api-key-note'),
+  model: $('model'),
+  modelNote: $('model-note'),
+  maxTokens: $('max-tokens'),
+  testConnection: $('test-connection'),
+  testResult: $('test-result'),
+  announcer: $('announcer'),
+  alerter: $('alerter'),
 };
 
 // ---------------------------------------------------------------------------
 // DOM helpers
 
 // h('button', { class: 'btn', type: 'button' }, 'Label', childNode, …). Strings become text
-// nodes, so text typed by the user is never parsed as HTML.
+// nodes, so text typed by the user (or sent back by a model) is never parsed as HTML.
 function h(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [name, value] of Object.entries(attrs)) {
@@ -66,16 +149,17 @@ function h(tag, attrs = {}, ...children) {
   return node;
 }
 
-// Screen-reader announcements for changes that don't move focus.
-let announceTimer;
-function announce(message) {
-  ui.announcer.textContent = '';
-  clearTimeout(announceTimer);
-  // Clearing first and setting the text a moment later makes a repeated message get read again.
-  announceTimer = setTimeout(() => {
-    ui.announcer.textContent = message;
+// Screen-reader announcements for changes that don't move focus. Clearing first and setting
+// the text a moment later makes a repeated message get read again.
+function speak(region, message) {
+  region.textContent = '';
+  clearTimeout(region.timer);
+  region.timer = setTimeout(() => {
+    region.textContent = message;
   }, 60);
 }
+const announce = (message) => speak(ui.announcer, message);
+const alertNow = (message) => speak(ui.alerter, message);
 
 // Swaps a button's label briefly ("Copied"), then puts it back.
 const labelTimers = new WeakMap();
@@ -96,8 +180,8 @@ async function copyText(text) {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
-    // The async clipboard needs a secure context (https or localhost); fall back to the
-    // older select-and-copy route.
+    // The async clipboard needs a secure context (https or localhost) and a focused page;
+    // fall back to the older select-and-copy route.
     const scratch = h('textarea', { class: 'offscreen', readonly: true, tabindex: '-1', 'aria-hidden': 'true' });
     scratch.value = text;
     const focused = document.activeElement;
@@ -120,6 +204,20 @@ async function copyWithFeedback(button, text) {
   flashLabel(button, copied ? 'Copied' : "Couldn't copy");
   announce(copied ? 'Copied to the clipboard.' : "Couldn't copy. Select the text and copy it by hand.");
 }
+
+function plural(count, noun) {
+  return `${count.toLocaleString()} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+function formatTime(timestamp) {
+  return new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatDuration(ms) {
+  return ms < 10000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
+}
+
+const isMac = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform ?? navigator.platform ?? '');
 
 // ---------------------------------------------------------------------------
 // Editor
@@ -234,8 +332,10 @@ function growAll() {
 
 // Everything that follows a change to the editor.
 function editorChanged() {
-  session.write(EDITOR_KEY, { elements: state.elements });
+  session.write(STORAGE.editor, { elements: state.elements });
+  if (state.active) state.active.edited = true;
   renderAssembled();
+  renderRunControls();
 }
 
 ui.elementList.addEventListener('input', (event) => {
@@ -272,10 +372,6 @@ function renderAssembled() {
   )}`;
 }
 
-function plural(count, noun) {
-  return `${count.toLocaleString()} ${noun}${count === 1 ? '' : 's'}`;
-}
-
 ui.copyPrompt.addEventListener('click', () => {
   copyWithFeedback(ui.copyPrompt, assemble(state.elements));
 });
@@ -304,11 +400,467 @@ function clearAll() {
 }
 
 // ---------------------------------------------------------------------------
+// Settings
+
+function currentSetup() {
+  const { provider, models, maxTokens } = state.settings;
+  return { provider, model: models[provider].trim() || PROVIDERS[provider].defaultModel, maxTokens };
+}
+
+function settingsChanged() {
+  session.write(STORAGE.settings, state.settings);
+  renderRunControls();
+}
+
+function buildProviderOptions() {
+  ui.providerOptions.replaceChildren(
+    ...PROVIDER_IDS.map((id) =>
+      h('label', {}, h('input', { type: 'radio', name: 'provider', value: id }), PROVIDERS[id].label),
+    ),
+  );
+  ui.maxTokens.min = String(MAX_OUTPUT_TOKENS.min);
+  ui.maxTokens.max = String(MAX_OUTPUT_TOKENS.max);
+}
+
+// Pushes state into the Settings form. The key and model fields show the chosen provider's.
+function syncSettingsForm() {
+  const { provider, models, maxTokens } = state.settings;
+  const info = PROVIDERS[provider];
+  for (const radio of ui.providerOptions.querySelectorAll('input')) radio.checked = radio.value === provider;
+  ui.apiKeyLabel.textContent = `${info.label} API key`;
+  ui.apiKey.value = state.keys[provider];
+  ui.apiKeyNote.textContent = `Stays in this browser tab (cleared when you close it) and is sent only to ${info.company}.`;
+  ui.model.value = models[provider];
+  ui.model.placeholder = info.defaultModel;
+  ui.modelNote.textContent = `Default: ${info.defaultModel}`;
+  ui.maxTokens.value = String(maxTokens);
+}
+
+function showTestResult(kind, message) {
+  ui.testResult.className = kind ? `test-result is-${kind}` : 'test-result';
+  ui.testResult.textContent = message;
+}
+
+function stopTest() {
+  state.test?.abort();
+  state.test = null;
+  ui.testConnection.disabled = false;
+  showTestResult('', '');
+}
+
+ui.openSettings.addEventListener('click', openSettings);
+ui.runSetup.addEventListener('click', openSettings);
+
+function openSettings() {
+  syncSettingsForm();
+  ui.settings.showModal();
+}
+
+function closeSettings() {
+  stopTest();
+  ui.settings.close();
+}
+
+ui.settingsClose.addEventListener('click', closeSettings);
+// A click on the dimmed backdrop lands on the dialog element itself.
+ui.settings.addEventListener('click', (event) => {
+  if (event.target === ui.settings) closeSettings();
+});
+ui.settings.addEventListener('cancel', () => stopTest());
+
+ui.providerOptions.addEventListener('change', (event) => {
+  if (!event.target.checked) return;
+  state.settings.provider = event.target.value;
+  stopTest();
+  syncSettingsForm();
+  settingsChanged();
+});
+
+ui.apiKey.addEventListener('input', () => {
+  state.keys[state.settings.provider] = ui.apiKey.value;
+  session.write(STORAGE.keys, state.keys);
+  stopTest();
+});
+
+ui.model.addEventListener('input', () => {
+  state.settings.models[state.settings.provider] = ui.model.value;
+  stopTest();
+  settingsChanged();
+});
+
+// An emptied model field goes back to the default rather than staying blank.
+ui.model.addEventListener('change', () => {
+  const { provider } = state.settings;
+  const model = ui.model.value.trim() || PROVIDERS[provider].defaultModel;
+  ui.model.value = model;
+  state.settings.models[provider] = model;
+  settingsChanged();
+});
+
+ui.maxTokens.addEventListener('input', () => {
+  const value = Number(ui.maxTokens.value);
+  if (Number.isInteger(value) && value >= MAX_OUTPUT_TOKENS.min && value <= MAX_OUTPUT_TOKENS.max) {
+    state.settings.maxTokens = value;
+    settingsChanged();
+  }
+});
+
+ui.maxTokens.addEventListener('change', () => {
+  state.settings.maxTokens = clampTokens(ui.maxTokens.value, state.settings.maxTokens);
+  ui.maxTokens.value = String(state.settings.maxTokens);
+  settingsChanged();
+});
+
+ui.testConnection.addEventListener('click', testConnection);
+
+async function testConnection() {
+  const setup = currentSetup();
+  const { label } = PROVIDERS[setup.provider];
+  if (!state.keys[setup.provider].trim()) {
+    showTestResult('error', `Paste your ${label} API key into the field above first.`);
+    return;
+  }
+  state.test?.abort();
+  const controller = new AbortController();
+  state.test = controller;
+  ui.testConnection.disabled = true;
+  showTestResult('', `Testing ${label}…`);
+  try {
+    await runPrompt({
+      ...setup,
+      apiKey: state.keys[setup.provider],
+      prompt: TEST_PROMPT,
+      signal: controller.signal,
+      retryDelaysMs: [],
+    });
+    showTestResult('ok', `Connected. ${label} answered using ${setup.model}.`);
+  } catch (error) {
+    if (state.test !== controller) return; // superseded or closed
+    if (error instanceof ProviderError && ANSWERED.has(error.kind)) {
+      showTestResult('ok', `Connected. The key and ${setup.model} work.`);
+    } else if (error instanceof ProviderError) {
+      showTestResult('error', error.message);
+    } else {
+      console.error(error);
+      showTestResult('error', 'Something went wrong. Try again.');
+    }
+  } finally {
+    if (state.test === controller) {
+      state.test = null;
+      ui.testConnection.disabled = false;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Run
+
+// True when running now would send a different prompt or settings from the most recent run.
+function editedSinceLastRun() {
+  const last = state.runs[0];
+  if (!last) return false;
+  const setup = currentSetup();
+  return (
+    assemble(state.elements) !== last.assembledPrompt ||
+    setup.provider !== last.provider ||
+    setup.model !== last.model ||
+    setup.maxTokens !== last.maxTokens
+  );
+}
+
+function canRun() {
+  return !state.active && assemble(state.elements) !== '';
+}
+
+function renderRunControls() {
+  const running = Boolean(state.active);
+  // aria-disabled rather than disabled, so the button keeps focus while a run is in progress.
+  ui.run.setAttribute('aria-disabled', String(!canRun()));
+  ui.cancel.hidden = !running;
+  ui.editedBadge.hidden = running || !editedSinceLastRun();
+  const { provider, model } = currentSetup();
+  const setup = `${PROVIDERS[provider].label} · ${model}`;
+  ui.runSetup.textContent = setup;
+  ui.runSetup.setAttribute('aria-label', `${setup}: open Settings`);
+}
+
+function setStatus(kind, message, action = '') {
+  ui.runStatus.className = kind ? `run-status is-${kind}` : 'run-status';
+  const parts = [h('span', {}, message)];
+  if (kind === 'running') parts.unshift(h('span', { class: 'spinner', 'aria-hidden': 'true' }));
+  if (action) parts.push(h('span', { class: 'status-action' }, action));
+  ui.runStatus.replaceChildren(...parts);
+}
+
+function showWaiting(active, name) {
+  const seconds = Math.floor((Date.now() - active.startedAt) / 1000);
+  setStatus('running', seconds ? `Waiting for ${name}… ${seconds} s` : `Waiting for ${name}…`);
+}
+
+ui.run.addEventListener('click', startRun);
+
+ui.cancel.addEventListener('click', () => {
+  state.active?.controller.abort();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey) || event.isComposing) return;
+  if (document.querySelector('dialog[open]')) return;
+  event.preventDefault();
+  startRun();
+});
+
+async function startRun() {
+  if (!canRun()) return;
+  const prompt = assemble(state.elements);
+  const setup = currentSetup();
+  const elements = cloneElements(state.elements);
+  const name = PROVIDERS[setup.provider].label;
+  const active = {
+    controller: new AbortController(),
+    startedAt: Date.now(),
+    timer: 0,
+    retrying: 0,
+    edited: false,
+  };
+  state.active = active;
+  renderRunControls();
+  showWaiting(active, name);
+  active.timer = setInterval(() => {
+    if (!active.retrying) showWaiting(active, name);
+  }, 1000);
+  announce(`Running on ${name}.`);
+
+  try {
+    const result = await runPrompt({
+      ...setup,
+      apiKey: state.keys[setup.provider],
+      prompt,
+      signal: active.controller.signal,
+      onRetryWait: ({ secondsLeft, retry, retries }) => {
+        if (secondsLeft === 0) {
+          active.retrying = 0;
+          showWaiting(active, name);
+          return;
+        }
+        if (active.retrying !== retry) {
+          active.retrying = retry;
+          announce(`${name} is rate-limiting requests. Retrying in ${secondsLeft} seconds.`);
+        }
+        setStatus('running', `${name} is rate-limiting requests. Retrying in ${secondsLeft} s (retry ${retry} of ${retries}).`);
+      },
+    });
+    const run = addRun({
+      ...setup,
+      elements,
+      assembledPrompt: prompt,
+      output: result.text,
+      durationMs: result.durationMs,
+      truncated: result.truncated,
+      reasoning: result.reasoning,
+    });
+    setStatus('done', `Run #${run.number} finished in ${formatDuration(run.durationMs)}.`);
+    announce(`Run ${run.number} finished.`);
+    // Leave the page where it is if the user kept editing while waiting.
+    if (!active.edited) revealOutput();
+  } catch (error) {
+    if (error instanceof ProviderError && error.kind === 'cancelled') {
+      setStatus('', 'Cancelled.');
+      announce('Cancelled.');
+    } else {
+      const problem = error instanceof ProviderError ? error : unexpected(error);
+      setStatus('error', problem.summary, problem.action);
+      alertNow(problem.message);
+    }
+  } finally {
+    clearInterval(active.timer);
+    const cancelHadFocus = document.activeElement === ui.cancel;
+    state.active = null;
+    renderRunControls();
+    if (cancelHadFocus) ui.run.focus();
+  }
+}
+
+function unexpected(error) {
+  console.error(error);
+  return new ProviderError('unknown', 'Something went wrong.', 'Try again, and reload the page if it keeps happening.');
+}
+
+function addRun(details) {
+  state.runCount += 1;
+  const run = { id: `run-${state.runCount}`, number: state.runCount, createdAt: Date.now(), ...details };
+  state.runs.unshift(run);
+  state.viewedRunId = run.id;
+  renderRuns();
+  renderOutput();
+  return run;
+}
+
+function revealOutput() {
+  if (ui.outputSection.getBoundingClientRect().top < window.innerHeight - 160) return;
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  ui.outputSection.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+}
+
+// ---------------------------------------------------------------------------
+// Output panel
+
+function viewedRun() {
+  return state.runs.find((run) => run.id === state.viewedRunId) ?? null;
+}
+
+function renderOutput() {
+  const run = viewedRun();
+  ui.outputEmpty.hidden = Boolean(run);
+  for (const node of [ui.output, ui.outputActions, ui.sentPrompt]) node.hidden = !run;
+  if (!run) {
+    ui.outputMeta.textContent = '';
+    ui.outputNote.hidden = true;
+    return;
+  }
+  const meta = [
+    `Run #${run.number}`,
+    formatTime(run.createdAt),
+    `${PROVIDERS[run.provider].label} · ${run.model}`,
+    formatDuration(run.durationMs),
+  ];
+  if (run.reasoning === 'default') meta.push("model's default reasoning");
+  ui.outputMeta.textContent = meta.join(' · ');
+  ui.output.textContent = run.output;
+  ui.outputNote.hidden = !run.truncated;
+  ui.outputNote.textContent = run.truncated
+    ? `Stopped at the Max output tokens limit (${run.maxTokens.toLocaleString()}). Raise it in Settings for a longer answer.`
+    : '';
+  ui.sentPromptSummary.textContent = `Prompt sent in run #${run.number}`;
+  ui.sentPromptText.textContent = run.assembledPrompt;
+}
+
+ui.copyOutput.addEventListener('click', () => {
+  const run = viewedRun();
+  if (run) copyWithFeedback(ui.copyOutput, run.output);
+});
+
+ui.loadRun.addEventListener('click', () => {
+  const run = viewedRun();
+  if (!run) return;
+  state.elements = cloneElements(run.elements);
+  state.settings.provider = run.provider;
+  state.settings.models[run.provider] = run.model;
+  state.settings.maxTokens = run.maxTokens;
+  syncEditor();
+  syncSettingsForm();
+  session.write(STORAGE.settings, state.settings);
+  editorChanged();
+  flashLabel(ui.loadRun, 'Loaded');
+  announce(`Run ${run.number} loaded into the editor.`);
+});
+
+// ---------------------------------------------------------------------------
+// Run list
+
+function renderRuns() {
+  ui.runsCount.textContent = String(state.runs.length);
+  ui.runsEmpty.hidden = state.runs.length > 0;
+  ui.runList.replaceChildren(...state.runs.map(runItem));
+}
+
+function runItem(run) {
+  const plugged = ELEMENTS.filter((def) => run.elements[def.id].plugged).map((def) => def.label);
+  return h(
+    'li',
+    {},
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'run-open',
+        'data-run': run.id,
+        'aria-current': run.id === state.viewedRunId ? 'true' : null,
+      },
+      h(
+        'span',
+        { class: 'run-line' },
+        h('span', { class: 'run-number' }, `Run #${run.number}`),
+        h('span', { class: 'run-meta' }, `${formatTime(run.createdAt)} · ${formatDuration(run.durationMs)}`),
+      ),
+      h('span', { class: 'run-model' }, `${PROVIDERS[run.provider].label} · ${run.model}`),
+      h(
+        'span',
+        { class: 'chips' },
+        h('span', { class: 'sr-only' }, plugged.length ? `Plugged: ${plugged.join(', ')}.` : 'Nothing plugged.'),
+        ELEMENTS.map((def) => chip(def, run.elements[def.id])),
+      ),
+    ),
+  );
+}
+
+// Two-letter chip, filled when the element was plugged in for the run, hollow when not.
+function chip(def, element) {
+  let title = `${def.label}: ${element.plugged ? 'plugged' : 'unplugged'}`;
+  if (element.plugged && !hasContent(def, element)) title += ' (empty, so not sent)';
+  return h('span', { class: element.plugged ? 'chip is-on' : 'chip', title, 'aria-hidden': 'true' }, def.chip);
+}
+
+ui.runList.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-run]');
+  if (!button) return;
+  state.viewedRunId = button.dataset.run;
+  for (const item of ui.runList.querySelectorAll('[data-run]')) {
+    if (item.dataset.run === state.viewedRunId) item.setAttribute('aria-current', 'true');
+    else item.removeAttribute('aria-current');
+  }
+  renderOutput();
+  if (!wideScreen.matches) {
+    closeRunsDrawer({ restoreFocus: false });
+    ui.output.focus({ preventScroll: true });
+  }
+  revealOutput();
+});
+
+// Below 1024px the run list is a drawer that slides over the page.
+const wideScreen = window.matchMedia('(min-width: 1024px)');
+
+function openRunsDrawer() {
+  document.body.classList.add('runs-open');
+  ui.runsToggle.setAttribute('aria-expanded', 'true');
+  ui.scrim.hidden = false;
+  ui.main.inert = true;
+  ui.topbar.inert = true;
+  ui.runsTitle.focus();
+}
+
+function closeRunsDrawer({ restoreFocus = true } = {}) {
+  if (!document.body.classList.contains('runs-open')) return;
+  document.body.classList.remove('runs-open');
+  ui.runsToggle.setAttribute('aria-expanded', 'false');
+  ui.scrim.hidden = true;
+  ui.main.inert = false;
+  ui.topbar.inert = false;
+  if (restoreFocus) ui.runsToggle.focus();
+}
+
+ui.runsToggle.addEventListener('click', openRunsDrawer);
+ui.runsClose.addEventListener('click', () => closeRunsDrawer());
+ui.scrim.addEventListener('click', () => closeRunsDrawer());
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && document.body.classList.contains('runs-open')) closeRunsDrawer();
+});
+wideScreen.addEventListener('change', () => {
+  if (wideScreen.matches) closeRunsDrawer({ restoreFocus: false });
+});
+
+// ---------------------------------------------------------------------------
 // Start
 
 buildEditor();
+buildProviderOptions();
 syncEditor();
+syncSettingsForm();
 renderAssembled();
+renderRuns();
+renderOutput();
+renderRunControls();
+ui.runShortcut.textContent = isMac ? '⌘ Enter' : 'Ctrl Enter';
 ui.bootNote.remove();
 
 let resizeTimer;

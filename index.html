@@ -9,7 +9,7 @@
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
-  <header class="topbar">
+  <header class="topbar" id="topbar">
     <h1 class="brand">
       <svg class="brand-mark" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
         <path d="M7.5 2v4M12.5 2v4M10 14v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
@@ -17,15 +17,28 @@
       </svg>
       Prompt Playground
     </h1>
+    <div class="topbar-actions">
+      <button type="button" class="btn btn-quiet runs-toggle" id="runs-toggle" aria-controls="runs" aria-expanded="false">
+        Runs <span class="count" id="runs-count">0</span>
+      </button>
+      <button type="button" class="btn btn-quiet" id="open-settings">
+        <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+          <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-dasharray="2.75 2.75"/>
+          <circle cx="10" cy="10" r="5.1" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <circle cx="10" cy="10" r="1.9" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        </svg>
+        Settings
+      </button>
+    </div>
   </header>
 
-  <main class="layout">
-    <p class="boot-note" id="boot-note">
-      Prompt Playground didn't start. Open it through a local web server rather than by
-      double-clicking <code>index.html</code>, and check that JavaScript is on. The README shows how.
-    </p>
+  <div class="layout">
+    <main class="workspace" id="main">
+      <p class="boot-note" id="boot-note">
+        Prompt Playground didn't start. Open it through a local web server rather than by
+        double-clicking <code>index.html</code>, and check that JavaScript is on. The README shows how.
+      </p>
 
-    <div class="workspace">
       <section class="editor" aria-labelledby="editor-title">
         <div class="section-head">
           <h2 id="editor-title">Prompt elements</h2>
@@ -49,13 +62,55 @@
           Nothing to send yet. Text you type into a plugged element appears here.
         </p>
       </section>
-    </div>
-  </main>
+
+      <div class="run-bar" id="run-bar">
+        <button type="button" class="btn btn-primary btn-run" id="run" aria-keyshortcuts="Control+Enter Meta+Enter">
+          Run <kbd class="kbd" id="run-shortcut" aria-hidden="true">Ctrl Enter</kbd>
+        </button>
+        <button type="button" class="btn" id="cancel" hidden>Cancel</button>
+        <span class="badge" id="edited-badge" hidden>Edited since last run</span>
+        <p class="run-status" id="run-status"></p>
+        <button type="button" class="btn btn-quiet run-setup" id="run-setup"></button>
+      </div>
+
+      <section class="output" id="output-section" aria-labelledby="output-title">
+        <div class="section-head">
+          <h2 id="output-title">Output</h2>
+          <span class="section-meta" id="output-meta"></span>
+          <div class="section-actions" id="output-actions" hidden>
+            <button type="button" class="btn" id="copy-output">Copy</button>
+            <button type="button" class="btn" id="load-run">Load into editor</button>
+          </div>
+        </div>
+        <pre class="mono-block output-text" id="output" role="region" aria-labelledby="output-title" tabindex="0" hidden></pre>
+        <p class="output-note" id="output-note" hidden></p>
+        <details class="sent-prompt" id="sent-prompt" hidden>
+          <summary id="sent-prompt-summary">Prompt sent</summary>
+          <pre class="mono-block" id="sent-prompt-text"></pre>
+        </details>
+        <p class="empty-note" id="output-empty">Run the prompt and the model's reply appears here.</p>
+      </section>
+    </main>
+
+    <aside class="runs" id="runs" aria-labelledby="runs-title">
+      <div class="runs-head">
+        <h2 id="runs-title" tabindex="-1">Runs</h2>
+        <button type="button" class="btn btn-quiet runs-close" id="runs-close">Close</button>
+      </div>
+      <p class="runs-note">Kept in memory for this tab only. Reloading or closing the tab clears them.</p>
+      <ol class="run-list" id="run-list"></ol>
+      <p class="empty-note" id="runs-empty">No runs yet.</p>
+    </aside>
+  </div>
+
+  <div class="scrim" id="scrim" hidden></div>
 
   <dialog class="dialog" id="confirm-clear" aria-labelledby="confirm-clear-title" aria-describedby="confirm-clear-text">
     <form method="dialog">
       <h2 id="confirm-clear-title">Clear all fields?</h2>
-      <p id="confirm-clear-text">This empties all seven elements and plugs them all back in. It can't be undone.</p>
+      <p id="confirm-clear-text">
+        This empties all seven elements and plugs them all back in. It can't be undone. Your runs are kept.
+      </p>
       <div class="dialog-actions">
         <button class="btn" value="cancel" autofocus>Cancel</button>
         <button class="btn btn-danger" value="clear">Clear all</button>
@@ -63,6 +118,48 @@
     </form>
   </dialog>
 
+  <dialog class="drawer" id="settings" aria-labelledby="settings-title">
+    <div class="drawer-body">
+      <div class="drawer-head">
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="btn btn-quiet" id="settings-close">Done</button>
+      </div>
+
+      <fieldset class="setting">
+        <legend class="setting-label">Provider</legend>
+        <div class="segmented" id="provider-options"></div>
+      </fieldset>
+
+      <div class="setting">
+        <label class="setting-label" for="api-key" id="api-key-label">API key</label>
+        <input class="input" id="api-key" type="password" autocomplete="off" spellcheck="false" aria-describedby="api-key-note">
+        <p class="setting-note" id="api-key-note"></p>
+      </div>
+
+      <div class="setting">
+        <label class="setting-label" for="model">Model</label>
+        <input class="input mono" id="model" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="model-note">
+        <p class="setting-note" id="model-note"></p>
+      </div>
+
+      <div class="setting">
+        <label class="setting-label" for="max-tokens">Max output tokens</label>
+        <input class="input" id="max-tokens" type="number" inputmode="numeric" step="1" aria-describedby="max-tokens-note">
+        <p class="setting-note" id="max-tokens-note">
+          Runs ask each model for its lowest reasoning setting, so this limit goes to the answer.
+        </p>
+      </div>
+
+      <div class="setting">
+        <div class="test-row">
+          <button type="button" class="btn" id="test-connection">Test connection</button>
+        </div>
+        <p class="test-result" id="test-result" role="status"></p>
+      </div>
+    </div>
+  </dialog>
+
   <div class="sr-only" id="announcer" aria-live="polite"></div>
+  <div class="sr-only" id="alerter" role="alert"></div>
 </body>
 </html>
