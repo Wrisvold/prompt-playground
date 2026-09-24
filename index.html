@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Prompt Playground</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="brand">
+      <svg class="brand-mark" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+        <path d="M7.5 2v4M12.5 2v4M10 14v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M5 6h10v3a5 5 0 0 1-10 0z" fill="currentColor"/>
+      </svg>
+      Prompt Playground
+    </h1>
+  </header>
+
+  <main class="layout">
+    <p class="boot-note" id="boot-note">
+      Prompt Playground didn't start. Open it through a local web server rather than by
+      double-clicking <code>index.html</code>, and check that JavaScript is on. The README shows how.
+    </p>
+
+    <div class="workspace">
+      <section class="editor" aria-labelledby="editor-title">
+        <div class="section-head">
+          <h2 id="editor-title">Prompt elements</h2>
+          <div class="section-actions">
+            <button type="button" class="btn btn-quiet" id="clear-all">Clear all</button>
+          </div>
+        </div>
+        <div class="element-list" id="element-list"></div>
+      </section>
+
+      <section class="assembled">
+        <div class="section-head">
+          <h2 id="assembled-title">Assembled prompt</h2>
+          <span class="section-meta" id="prompt-stats"></span>
+          <div class="section-actions">
+            <button type="button" class="btn" id="copy-prompt">Copy</button>
+          </div>
+        </div>
+        <pre class="mono-block" id="assembled" role="region" aria-labelledby="assembled-title" tabindex="0"></pre>
+        <p class="empty-note" id="assembled-empty" hidden>
+          Nothing to send yet. Text you type into a plugged element appears here.
+        </p>
+      </section>
+    </div>
+  </main>
+
+  <dialog class="dialog" id="confirm-clear" aria-labelledby="confirm-clear-title" aria-describedby="confirm-clear-text">
+    <form method="dialog">
+      <h2 id="confirm-clear-title">Clear all fields?</h2>
+      <p id="confirm-clear-text">This empties all seven elements and plugs them all back in. It can't be undone.</p>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel" autofocus>Cancel</button>
+        <button class="btn btn-danger" value="clear">Clear all</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="sr-only" id="announcer" aria-live="polite"></div>
+</body>
+</html>
