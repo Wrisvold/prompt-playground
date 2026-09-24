@@ -5,6 +5,7 @@ import {
   ELEMENTS,
   assemble,
   cloneElements,
+  compareElements,
   createEmptyElements,
   estimateTokens,
   hasContent,
@@ -12,6 +13,7 @@ import {
   textKeys,
 } from './elements.js';
 import { DEFAULT_PROVIDER, MAX_OUTPUT_TOKENS, PROVIDERS, TEST_PROMPT } from './constants.js';
+import { diffWords, textStats } from './diff.js';
 import { ProviderError, runPrompt } from './provider.js';
 
 const STORAGE = {
@@ -76,6 +78,7 @@ const state = {
   runs: [], // newest first; kept in memory only, so a reload clears them
   runCount: 0,
   viewedRunId: null,
+  compareIds: [], // ticked runs, in the order they were ticked (at most two)
   active: null, // the run in progress: { controller, startedAt, timer, retrying, edited }
   test: null, // AbortController for a Test connection in progress
 };
@@ -116,6 +119,19 @@ const ui = {
   runsClose: $('runs-close'),
   runList: $('run-list'),
   runsEmpty: $('runs-empty'),
+  compareOpen: $('compare-open'),
+  compareHint: $('compare-hint'),
+  compare: $('compare'),
+  compareTitle: $('compare-title'),
+  compareClose: $('compare-close'),
+  setupChanges: $('setup-changes'),
+  columns: {
+    left: { title: $('left-title'), stats: $('left-stats'), output: $('left-output') },
+    right: { title: $('right-title'), stats: $('right-stats'), output: $('right-output') },
+  },
+  diffLegend: $('diff-legend'),
+  diffIdentical: $('diff-identical'),
+  wordDiff: $('word-diff'),
   scrim: $('scrim'),
   openSettings: $('open-settings'),
   settings: $('settings'),
@@ -762,13 +778,18 @@ function renderRuns() {
   ui.runsCount.textContent = String(state.runs.length);
   ui.runsEmpty.hidden = state.runs.length > 0;
   ui.runList.replaceChildren(...state.runs.map(runItem));
+  syncPicks();
+}
+
+function findRun(id) {
+  return state.runs.find((run) => run.id === id);
 }
 
 function runItem(run) {
   const plugged = ELEMENTS.filter((def) => run.elements[def.id].plugged).map((def) => def.label);
   return h(
     'li',
-    {},
+    { class: 'run-item' },
     h(
       'button',
       {
@@ -790,6 +811,12 @@ function runItem(run) {
         h('span', { class: 'sr-only' }, plugged.length ? `Plugged: ${plugged.join(', ')}.` : 'Nothing plugged.'),
         ELEMENTS.map((def) => chip(def, run.elements[def.id])),
       ),
+    ),
+    // After the card in the page order, so Tab reaches the run before its checkbox.
+    h(
+      'label',
+      { class: 'run-pick', title: 'Tick to compare' },
+      h('input', { type: 'checkbox', 'data-pick': run.id, 'aria-label': `Compare run #${run.number}` }),
     ),
   );
 }
@@ -816,6 +843,33 @@ ui.runList.addEventListener('click', (event) => {
   }
   revealOutput();
 });
+
+// Up to two runs can be ticked for comparison; ticking a third unticks the one ticked first.
+ui.runList.addEventListener('change', (event) => {
+  const box = event.target.closest('input[data-pick]');
+  if (!box) return;
+  const ids = state.compareIds.filter((id) => id !== box.dataset.pick);
+  if (box.checked) ids.push(box.dataset.pick);
+  const dropped = ids.length > 2 ? ids.shift() : null;
+  state.compareIds = ids;
+  syncPicks();
+  if (dropped) announce(`Run ${findRun(dropped).number} unticked. You can compare two runs at a time.`);
+});
+
+function syncPicks() {
+  for (const box of ui.runList.querySelectorAll('input[data-pick]')) {
+    box.checked = state.compareIds.includes(box.dataset.pick);
+  }
+  const ticked = state.compareIds.map((id) => findRun(id).number).sort((a, b) => a - b);
+  ui.compareOpen.setAttribute('aria-disabled', String(ticked.length !== 2));
+  ui.compareHint.hidden = state.runs.length === 0;
+  ui.compareHint.textContent =
+    ticked.length === 2
+      ? `Run #${ticked[0]} and run #${ticked[1]} are ticked.`
+      : ticked.length === 1
+        ? 'Tick one more run to compare.'
+        : 'Tick two runs to compare them.';
+}
 
 // Below 1024px the run list is a drawer that slides over the page.
 const wideScreen = window.matchMedia('(min-width: 1024px)');
@@ -848,6 +902,105 @@ document.addEventListener('keydown', (event) => {
 wideScreen.addEventListener('change', () => {
   if (wideScreen.matches) closeRunsDrawer({ restoreFocus: false });
 });
+
+// ---------------------------------------------------------------------------
+// Compare view
+
+ui.compareOpen.addEventListener('click', () => {
+  if (state.compareIds.length !== 2) return;
+  const [older, newer] = state.compareIds.map(findRun).sort((a, b) => a.number - b.number);
+  renderCompare(older, newer);
+  ui.compare.showModal();
+  ui.compare.scrollTop = 0;
+});
+
+ui.compareClose.addEventListener('click', () => ui.compare.close());
+// A click on the dimmed backdrop lands on the dialog element itself.
+ui.compare.addEventListener('click', (event) => {
+  if (event.target === ui.compare) ui.compare.close();
+});
+
+function renderCompare(older, newer) {
+  ui.compareTitle.textContent = `Compare run #${older.number} and run #${newer.number}`;
+
+  const changes = setupChanges(older, newer);
+  ui.setupChanges.replaceChildren(
+    changes.length
+      ? h('ul', { class: 'setup-list' }, changes.map((change) => h('li', {}, change)))
+      : h('p', { class: 'setup-same' }, 'Same prompt and settings — differences below are run-to-run variation.'),
+  );
+
+  fillColumn(ui.columns.left, older);
+  fillColumn(ui.columns.right, newer);
+
+  const segments = diffWords(older.output, newer.output);
+  ui.diffIdentical.hidden = !segments.every((segment) => segment.type === 'same');
+  ui.diffLegend.replaceChildren(
+    h('span', { class: 'mark-remove' }, 'Struck through'),
+    ` only in run #${older.number} · `,
+    h('span', { class: 'mark-add' }, 'underlined'),
+    ` only in run #${newer.number}`,
+  );
+  ui.wordDiff.replaceChildren(...diffNodes(segments));
+}
+
+// One entry per difference between the two runs' setups, oldest value first.
+function setupChanges(older, newer) {
+  const label = (id) => ELEMENTS.find((def) => def.id === id).label;
+  const names = (ids, run) =>
+    ids
+      .map((id) => {
+        const def = ELEMENTS.find((candidate) => candidate.id === id);
+        return hasContent(def, run.elements[id]) ? def.label : `${def.label} (empty)`;
+      })
+      .join(', ');
+  const change = (name, from, to) => [
+    h('strong', {}, `${name}: `),
+    from,
+    h('span', { 'aria-hidden': 'true' }, ' → '),
+    h('span', { class: 'sr-only' }, ' changed to '),
+    to,
+  ];
+
+  const { onlyBefore, onlyAfter, textChanged } = compareElements(older.elements, newer.elements);
+  const changes = [];
+  if (onlyBefore.length) changes.push([h('strong', {}, `Plugged in run #${older.number} only: `), names(onlyBefore, older)]);
+  if (onlyAfter.length) changes.push([h('strong', {}, `Plugged in run #${newer.number} only: `), names(onlyAfter, newer)]);
+  if (textChanged.length) changes.push([h('strong', {}, 'Text changed: '), textChanged.map(label).join(', ')]);
+  if (older.provider !== newer.provider) {
+    changes.push(change('Provider', PROVIDERS[older.provider].label, PROVIDERS[newer.provider].label));
+  }
+  if (older.model !== newer.model) changes.push(change('Model', older.model, newer.model));
+  if (older.maxTokens !== newer.maxTokens) {
+    changes.push(change('Max output tokens', older.maxTokens.toLocaleString(), newer.maxTokens.toLocaleString()));
+  }
+  return changes;
+}
+
+function fillColumn(column, run) {
+  const { words, paragraphs, listItems } = textStats(run.output);
+  const stats = [plural(words, 'word'), plural(paragraphs, 'paragraph'), plural(listItems, 'list item')];
+  if (run.truncated) stats.push('stopped at the token limit');
+  column.title.textContent = `Run #${run.number} · ${run.model}`;
+  column.stats.textContent = stats.join(' · ');
+  column.output.textContent = run.output;
+}
+
+// Removed words become <del>, added words <ins>. Leading whitespace stays outside the mark so
+// the strike-through or underline doesn't run into the gap before a word.
+function diffNodes(segments) {
+  const nodes = [];
+  for (const { type, text } of segments) {
+    if (type === 'same') {
+      nodes.push(text);
+      continue;
+    }
+    const [, lead, body] = /^(\s*)([\s\S]*)$/.exec(text);
+    if (lead) nodes.push(lead);
+    if (body) nodes.push(h(type === 'remove' ? 'del' : 'ins', {}, body));
+  }
+  return nodes;
+}
 
 // ---------------------------------------------------------------------------
 // Start

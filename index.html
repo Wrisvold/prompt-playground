@@ -95,9 +95,13 @@
     <aside class="runs" id="runs" aria-labelledby="runs-title">
       <div class="runs-head">
         <h2 id="runs-title" tabindex="-1">Runs</h2>
-        <button type="button" class="btn btn-quiet runs-close" id="runs-close">Close</button>
+        <div class="runs-actions">
+          <button type="button" class="btn btn-small" id="compare-open" aria-disabled="true" aria-describedby="compare-hint">Compare</button>
+          <button type="button" class="btn btn-quiet btn-small runs-close" id="runs-close">Close</button>
+        </div>
       </div>
       <p class="runs-note">Kept in memory for this tab only. Reloading or closing the tab clears them.</p>
+      <p class="runs-hint" id="compare-hint" hidden>Tick two runs to compare them.</p>
       <ol class="run-list" id="run-list"></ol>
       <p class="empty-note" id="runs-empty">No runs yet.</p>
     </aside>
@@ -116,6 +120,44 @@
         <button class="btn btn-danger" value="clear">Clear all</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog class="compare" id="compare" aria-labelledby="compare-title">
+    <div class="compare-head">
+      <h2 id="compare-title">Compare runs</h2>
+      <button type="button" class="btn" id="compare-close">Close</button>
+    </div>
+    <div class="compare-body">
+      <section aria-labelledby="setup-title">
+        <h3 class="compare-heading" id="setup-title">What changed in the setup</h3>
+        <div id="setup-changes"></div>
+      </section>
+
+      <section aria-labelledby="outputs-title">
+        <h3 class="compare-heading" id="outputs-title">Outputs</h3>
+        <div class="compare-columns">
+          <div class="compare-column">
+            <h4 class="column-title" id="left-title"></h4>
+            <p class="column-stats" id="left-stats"></p>
+            <pre class="mono-block" id="left-output" role="region" aria-labelledby="left-title" tabindex="0"></pre>
+          </div>
+          <div class="compare-column">
+            <h4 class="column-title" id="right-title"></h4>
+            <p class="column-stats" id="right-stats"></p>
+            <pre class="mono-block" id="right-output" role="region" aria-labelledby="right-title" tabindex="0"></pre>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="diff-title">
+        <div class="diff-head">
+          <h3 class="compare-heading" id="diff-title">Word diff</h3>
+          <p class="diff-legend" id="diff-legend"></p>
+        </div>
+        <p class="diff-identical" id="diff-identical" hidden>The two outputs are identical.</p>
+        <pre class="mono-block diff" id="word-diff" role="region" aria-labelledby="diff-title" tabindex="0"></pre>
+      </section>
+    </div>
   </dialog>
 
   <dialog class="drawer" id="settings" aria-labelledby="settings-title">

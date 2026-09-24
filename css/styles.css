@@ -19,6 +19,10 @@
   --danger-hover: #971f18;
   --on-danger: #ffffff;
   --success: #1d7a4b;
+  --del-bg: #fbe7e5;
+  --del-text: #8f1d16;
+  --ins-bg: #dff3e6;
+  --ins-text: #125a35;
   --knob: #ffffff;
   --knob-on: #ffffff;
   --backdrop: rgb(20 20 18 / 0.45);
@@ -50,6 +54,10 @@
     --danger-hover: #ffa69b;
     --on-danger: #2a0e0b;
     --success: #6cd49c;
+    --del-bg: #43211e;
+    --del-text: #ffb3a8;
+    --ins-bg: #173522;
+    --ins-text: #9fe3bb;
     --knob: #cfcec9;
     --knob-on: #0f1220;
     --backdrop: rgb(0 0 0 / 0.6);
@@ -313,6 +321,12 @@ code {
 .btn-quiet:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--surface-sunken);
   color: var(--text);
+}
+
+.btn-small {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 13px;
 }
 
 .btn-danger {
@@ -656,10 +670,52 @@ code {
   outline: none;
 }
 
+.runs-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .runs-note {
   margin-bottom: 12px;
   color: var(--text-faint);
   font-size: 12.5px;
+}
+
+.runs-hint {
+  margin: -4px 0 12px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+/* The compare checkbox sits over the card's top-right corner; it isn't inside the card's
+   button, since a control can't contain another control. */
+.run-item {
+  position: relative;
+}
+
+.run-pick {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.run-pick:hover {
+  background: var(--surface-sunken);
+}
+
+.run-pick input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 .run-list {
@@ -674,7 +730,7 @@ code {
   display: grid;
   gap: 5px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 10px 44px 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -902,6 +958,187 @@ legend.setting-label {
 
 .test-result.is-error {
   color: var(--danger);
+}
+
+/* ---------- Compare view ---------- */
+
+.compare {
+  width: min(1200px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+
+.compare::backdrop {
+  background: var(--backdrop, rgb(20 20 18 / 0.45));
+}
+
+.compare-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.compare-head h2 {
+  font-size: 16px;
+}
+
+.compare-body {
+  display: grid;
+  gap: 28px;
+  padding: 20px 20px 28px;
+}
+
+.compare-heading {
+  margin-bottom: 10px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.setup-list,
+.setup-same {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.setup-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 32px;
+}
+
+.setup-same {
+  color: var(--text-muted);
+}
+
+.compare-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+
+.column-title {
+  font-size: 13.5px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.column-stats {
+  margin: 2px 0 8px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.compare .mono-block {
+  max-height: none;
+  font-size: 13.5px;
+}
+
+.diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-bottom: 10px;
+}
+
+.diff-head .compare-heading {
+  margin-bottom: 0;
+}
+
+.diff-legend,
+.diff-identical {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.diff-identical {
+  margin-bottom: 8px;
+}
+
+/* Removed and added words differ by line style as well as colour. */
+.diff {
+  position: relative;
+  line-height: 1.75;
+}
+
+.diff del,
+.mark-remove {
+  background: var(--del-bg);
+  color: var(--del-text);
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.diff ins,
+.mark-add {
+  background: var(--ins-bg);
+  color: var(--ins-text);
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+
+.diff del,
+.diff ins,
+.mark-remove,
+.mark-add {
+  padding: 1px 1px;
+  border-radius: 3px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* Screen readers hear where each change starts and ends; the text isn't shown or copied. */
+.diff del::before,
+.diff del::after,
+.diff ins::before,
+.diff ins::after {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.diff del::before {
+  content: " [removed: ";
+}
+
+.diff ins::before {
+  content: " [added: ";
+}
+
+.diff del::after,
+.diff ins::after {
+  content: "] ";
+}
+
+@media (max-width: 760px) {
+  .compare-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ---------- Confirm dialog ---------- */

@@ -5,6 +5,7 @@ import {
   ELEMENTS,
   assemble,
   cloneElements,
+  compareElements,
   createEmptyElements,
   estimateTokens,
   hasContent,
@@ -185,6 +186,31 @@ test('hasContent looks at the text, or at any Rules sub-field', () => {
   assert.equal(hasContent(task, { plugged: false, text: 'x' }), true);
   assert.equal(hasContent(rules, { plugged: true, do: '', dont: '', fallback: '' }), false);
   assert.equal(hasContent(rules, { plugged: true, do: '', dont: 'No jargon', fallback: '' }), true);
+});
+
+test('compareElements lists plug differences and text changes, in the fixed order', () => {
+  const before = filled();
+  const after = filled();
+  before.persona.plugged = false; // plugged only in the later run
+  after.steps.plugged = false; // plugged only in the earlier run
+  after.task.text = 'Explain how to subtract fractions.';
+  after.rules.fallback = 'Say you are not sure.';
+  after.context.text = '  The learner is ten years old.\n'; // whitespace at the edges only
+  assert.deepEqual(compareElements(before, after), {
+    onlyBefore: ['steps'],
+    onlyAfter: ['persona'],
+    textChanged: ['task', 'rules'],
+  });
+});
+
+test('compareElements ignores text edits to an element unplugged in both runs', () => {
+  const before = filled();
+  const after = filled();
+  before.examples.plugged = false;
+  after.examples.plugged = false;
+  after.examples.text = 'Something new';
+  assert.deepEqual(compareElements(before, after), { onlyBefore: [], onlyAfter: [], textChanged: [] });
+  assert.deepEqual(compareElements(filled(), filled()), { onlyBefore: [], onlyAfter: [], textChanged: [] });
 });
 
 test('estimateTokens is characters divided by four, rounded up', () => {

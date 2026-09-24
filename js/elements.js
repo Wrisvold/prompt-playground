@@ -106,6 +106,26 @@ function rulesBody(def, element) {
     .join('\n');
 }
 
+// How two runs' elements differ, as element ids in the fixed order:
+//   onlyBefore / onlyAfter  plugged in one run and not the other
+//   textChanged             plugged in both, with different text (whitespace at the edges ignored)
+// Text edits to an element unplugged in both runs are left out: neither run sent it.
+export function compareElements(before, after) {
+  const a = normalizeElements(before);
+  const b = normalizeElements(after);
+  const result = { onlyBefore: [], onlyAfter: [], textChanged: [] };
+  for (const def of ELEMENTS) {
+    const x = a[def.id];
+    const y = b[def.id];
+    if (x.plugged && !y.plugged) result.onlyBefore.push(def.id);
+    else if (!x.plugged && y.plugged) result.onlyAfter.push(def.id);
+    else if (x.plugged && textKeys(def).some((key) => tidy(x[key]) !== tidy(y[key]))) {
+      result.textChanged.push(def.id);
+    }
+  }
+  return result;
+}
+
 // Rough token count: characters ÷ CHARS_PER_TOKEN, rounded up.
 export function estimateTokens(text) {
   return Math.ceil(String(text ?? '').length / CHARS_PER_TOKEN);
